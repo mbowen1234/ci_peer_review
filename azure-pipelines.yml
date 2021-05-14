@@ -1,0 +1,97 @@
+pr:
+  branches:
+    include:
+    - '*'
+
+trigger:
+  branches:
+    include:
+    - master
+
+variables:
+  - group: my-variable-group
+  - name: someVariable
+    value: someVariableValue
+  - name: another_variable
+    value: another_variable_value
+
+stages:
+- stage: Build
+  displayName: 'Build Application'
+  jobs:
+  - job: build
+    displayName: 'Build Application'
+    pool:
+      vmImage: ubuntu-latest
+    steps:
+    - task: UseDotNet@2
+      inputs:
+        packageType: 'sdk'
+        version: '3.1.100'
+
+    - task: DotNetCoreCLI@2
+      displayName: 'Restore Packages'
+      inputs:
+        command: 'restore'
+        #feedsToUse: 'config'
+        #nugetConfigPath: 'nuget.config'
+        projects: '*.sln'
+
+
+
+    - task: DotNetCoreCLI@2
+      displayName: 'build'
+      inputs:
+        command: 'build'
+        projects: '*.sln'
+        arguments: '--output $(System.DefaultWorkingDirectory)/publish_output --configuration Release'
+
+    - task: ArchiveFiles@2
+      displayName: 'Archive files'
+      inputs:
+        rootFolderOrFile: '$(System.DefaultWorkingDirectory)/publish_output'
+        includeRootFolder: false
+        archiveType: zip
+        archiveFile: $(Build.ArtifactStagingDirectory)/$(Build.SourceBranchName).zip
+        replaceExistingArchive: true
+
+    - task: PublishPipelineArtifact@1
+      inputs:
+        path: $(Build.ArtifactStagingDirectory)/$(Build.SourceBranchName).zip
+        artifact: FunctionApp
+
+- stage: deploy_prod
+  displayName: 'Deploy to Prod'
+  condition: eq(variables['Build.SourceBranch'], 'refs/heads/master')
+  variables:
+  - group: Snowflake-Connector-FunctionApp-Prod
+  jobs:
+  - deployment: deploy_prod
+    displayName: 'Deploy to Prod'
+    dependsOn: run_tests
+    environment: 'Production'
+    pool:
+      vmImage: ubuntu-latest
+      strategy:
+        runOnce:
+          deploy:
+            steps:
+            - checkout: self
+              persistCredentials: true
+           - task: DownloadPipelineArtifact@2
+            inputs:
+              buildType: 'specific'
+             buildVersionToDownload: 'latest'
+              artifactName: 'FunctionApp'
+              targetPath: '$(Pipeline.Workspace)'           
+           - task: AzureFunctionApp@1
+              displayName: 'Azure functions app deploy'
+              inputs:
+                resourceGroupName: '$(resourceGroupName)'
+                azureSubscription: '$(AzureSubscriptionProd)'
+                appType: functionApp
+                appName: '$(FunctionAppName)'
+                package: '$(Pipeline.Workspace)/**/*.zip'
+                appSettings: '
+                -foo "$(somevariable)"
+                - bar "$(anothervariable)"
